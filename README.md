@@ -1,1 +1,2 @@
-# TIES4700
+# TIES4700 Ryhmätyö repository
+# Tervetuloa
