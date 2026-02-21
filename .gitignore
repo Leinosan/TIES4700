@@ -4,3 +4,7 @@
 *.log
 
 outputs/
+
+RODI-DATA*
+
+.DS_Store
