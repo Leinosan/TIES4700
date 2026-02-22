@@ -17,8 +17,8 @@ BATCH_SIZE = 10
 
 # GPU SETTINGS
 # Enter device ID of your gpu if you want to run on gpu. Otherwise neglect.
-CUDA_DEVICE = 0
-GPU_MODE = 0  # set to 1 if want to run on gpu.
+CUDA_DEVICE = "mps"
+GPU_MODE = 1  # set to 1 if want to run on gpu.
 
 
 # SETTINGS FOR DISPLAYING ON TENSORBOARD
