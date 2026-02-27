@@ -12,7 +12,7 @@ DATA_DIR = 'RODI-DATA_split'
 
 # DATALOADER PROPERTIES
 # Set as high as possible. If you keep it too high, you'll get an out of memory error.
-BATCH_SIZE = 10
+BATCH_SIZE = 64
 
 
 # GPU SETTINGS

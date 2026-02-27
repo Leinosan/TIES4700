@@ -40,7 +40,11 @@ data_transforms = {
         transforms.RandomResizedCrop(224),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        transforms.ColorJitter(
+            brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1),
+        transforms.RandomRotation(15),
+        transforms.RandomGrayscale(p=0.1),
     ]),
     'val': transforms.Compose([
         transforms.Resize(224),
@@ -144,7 +148,7 @@ def exp_lr_scheduler(optimizer, epoch, init_lr=BASE_LR, lr_decay_epoch=EPOCH_DEC
 
 
 def main():
-    model_ft = models.resnet18(pretrained=True)
+    model_ft = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
     num_ftrs = model_ft.fc.in_features
     model_ft.fc = nn.Linear(num_ftrs, NUM_CLASSES)
 
