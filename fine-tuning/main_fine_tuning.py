@@ -5,7 +5,6 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 from torchvision import datasets, models, transforms
-import matplotlib.pyplot as plt
 import time
 import copy
 import os
@@ -33,21 +32,21 @@ else:
 
 print(f"Using device: {device}")
 
-count = 0
-
 data_transforms = {
     'train': transforms.Compose([
         transforms.RandomResizedCrop(224),
         transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        transforms.RandomVerticalFlip(),  # IMPROVEMENT: useful for underwater images
+        # IMPROVEMENT: stronger jitter for underwater lighting variation
         transforms.ColorJitter(
-            brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1),
+            brightness=0.4, contrast=0.4, saturation=0.4, hue=0.15),
         transforms.RandomRotation(15),
         transforms.RandomGrayscale(p=0.1),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
     ]),
     'val': transforms.Compose([
-        transforms.Resize(224),
+        transforms.Resize(256),
         transforms.CenterCrop(224),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
@@ -57,18 +56,36 @@ data_transforms = {
 data_dir = DATA_DIR
 dsets = {x: datasets.ImageFolder(os.path.join(data_dir, x), data_transforms[x])
          for x in ['train', 'val']}
-dset_loaders = {x: torch.utils.data.DataLoader(dsets[x], batch_size=BATCH_SIZE,
-                                               shuffle=True, num_workers=4)
-                for x in ['train', 'val']}
+
+# Handle class imbalance with WeightedRandomSampler
+class_counts = np.array([len(np.where(np.array(dsets['train'].targets) == i)[0])
+                         for i in range(NUM_CLASSES)])
+print(f"Class counts: {dict(zip(dsets['train'].classes, class_counts))}")
+
+class_weights = 1.0 / torch.tensor(class_counts, dtype=torch.float)
+sample_weights = [class_weights[label] for label in dsets['train'].targets]
+sampler = torch.utils.data.WeightedRandomSampler(
+    sample_weights, len(sample_weights))
+
+dset_loaders = {
+    'train': torch.utils.data.DataLoader(dsets['train'], batch_size=BATCH_SIZE,
+                                         sampler=sampler, num_workers=0, pin_memory=False),
+    'val':   torch.utils.data.DataLoader(dsets['val'],   batch_size=BATCH_SIZE,
+                                         shuffle=False,  num_workers=0, pin_memory=False),
+}
 dset_sizes = {x: len(dsets[x]) for x in ['train', 'val']}
 dset_classes = dsets['train'].classes
 
 
-def train_model(model, criterion, optimizer, lr_scheduler, num_epochs=30):
+def train_model(model, criterion, optimizer, scheduler, num_epochs=30):
     since = time.time()
-
+    best_epoch = 0
     best_model = model
     best_acc = 0.0
+
+    # IMPROVEMENT: early stopping - stop if no improvement for this many epochs
+    patience = 5
+    epochs_no_improve = 0
 
     for epoch in range(num_epochs):
         print('Epoch {}/{}'.format(epoch, num_epochs - 1))
@@ -76,7 +93,6 @@ def train_model(model, criterion, optimizer, lr_scheduler, num_epochs=30):
 
         for phase in ['train', 'val']:
             if phase == 'train':
-                optimizer = lr_scheduler(optimizer, epoch)
                 model.train()
             else:
                 model.eval()
@@ -88,7 +104,6 @@ def train_model(model, criterion, optimizer, lr_scheduler, num_epochs=30):
             for data in dset_loaders[phase]:
                 inputs, labels = data
 
-                # Move data to device (works for MPS, CUDA, or CPU)
                 inputs = inputs.float().to(device)
                 labels = labels.long().to(device)
 
@@ -119,49 +134,79 @@ def train_model(model, criterion, optimizer, lr_scheduler, num_epochs=30):
                 phase, epoch_loss, epoch_acc))
 
             if phase == 'val':
+                # IMPROVEMENT: ReduceLROnPlateau steps on val loss
+                scheduler.step(epoch_loss)
+                print(f"Current LR: {optimizer.param_groups[0]['lr']:.6f}")
+
                 if USE_TENSORBOARD:
                     foo.add_scalar_value('epoch_loss', epoch_loss, step=epoch)
                     foo.add_scalar_value('epoch_acc', epoch_acc, step=epoch)
+
                 if epoch_acc > best_acc:
                     best_acc = epoch_acc
                     best_model = copy.deepcopy(model)
+                    best_epoch = epoch
+                    epochs_no_improve = 0
                     print('new best accuracy = ', best_acc)
+                else:
+                    epochs_no_improve += 1
+                    print(f"No improvement for {epochs_no_improve} epoch(s)")
+
+        # IMPROVEMENT: early stopping check
+        if epochs_no_improve >= patience:
+            print(f"Early stopping triggered after {epoch + 1} epochs")
+            break
 
     time_elapsed = time.time() - since
     print('Training complete in {:.0f}m {:.0f}s'.format(
         time_elapsed // 60, time_elapsed % 60))
     print('Best val Acc: {:4f}'.format(best_acc))
-    return best_model
-
-
-def exp_lr_scheduler(optimizer, epoch, init_lr=BASE_LR, lr_decay_epoch=EPOCH_DECAY):
-    """Decay learning rate by a factor of DECAY_WEIGHT every lr_decay_epoch epochs."""
-    lr = init_lr * (DECAY_WEIGHT ** (epoch // lr_decay_epoch))
-
-    if epoch % lr_decay_epoch == 0:
-        print('LR is set to {}'.format(lr))
-
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
-
-    return optimizer
+    return best_model, best_acc, best_epoch
 
 
 def main():
-    model_ft = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+    model_ft = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+
+    # Freeze early layers
+    for param in model_ft.parameters():
+        param.requires_grad = False
+
+    # IMPROVEMENT: also unfreeze layer2 for more capacity
+    for param in model_ft.layer2.parameters():
+        param.requires_grad = True
+    for param in model_ft.layer3.parameters():
+        param.requires_grad = True
+    for param in model_ft.layer4.parameters():
+        param.requires_grad = True
+
     num_ftrs = model_ft.fc.in_features
     model_ft.fc = nn.Linear(num_ftrs, NUM_CLASSES)
 
-    # Move model and criterion to device
     model_ft = model_ft.to(device)
-    criterion = nn.CrossEntropyLoss().to(device)
 
-    optimizer_ft = optim.RMSprop(model_ft.parameters(), lr=0.0001)
+    # Weighted loss as a guard against class imbalance
+    class_weights = 1.0 / torch.tensor(class_counts, dtype=torch.float)
+    criterion = nn.CrossEntropyLoss(weight=class_weights.to(device))
 
-    trained = train_model(model_ft, criterion, optimizer_ft, exp_lr_scheduler,
-                          num_epochs=30)
+    # Only pass parameters that require gradients
+    optimizer_ft = optim.Adam(
+        filter(lambda p: p.requires_grad, model_ft.parameters()), lr=BASE_LR)
 
-    torch.save(trained.state_dict(), 'fine_tuned_best_model.pt')
+    # IMPROVEMENT: ReduceLROnPlateau instead of hand-rolled scheduler
+    # Reduces LR by factor 0.1 if val loss doesn't improve for 3 epochs
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer_ft, mode='min', factor=0.1, patience=3, verbose=True)
+
+    trained, best_acc, best_epoch = train_model(
+        model_ft, criterion, optimizer_ft, scheduler, num_epochs=30)
+
+    torch.save({
+        'epoch': best_epoch,
+        'model_state_dict': trained.state_dict(),
+        'best_acc': best_acc,
+        'num_classes': NUM_CLASSES,
+        'class_names': dset_classes,
+    }, 'model.pt')
 
 
 if __name__ == '__main__':
