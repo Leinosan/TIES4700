@@ -1,7 +1,7 @@
 # Learning rate parameters
 BASE_LR = 0.001
 # number of epochs after which the Learning rate is decayed exponentially.
-EPOCH_DECAY = 30
+EPOCH_DECAY = 10
 DECAY_WEIGHT = 0.1  # factor by which the learning rate is reduced.
 
 
@@ -12,7 +12,7 @@ DATA_DIR = 'RODI-DATA_split'
 
 # DATALOADER PROPERTIES
 # Set as high as possible. If you keep it too high, you'll get an out of memory error.
-BATCH_SIZE = 64
+BATCH_SIZE = 32
 
 
 # GPU SETTINGS

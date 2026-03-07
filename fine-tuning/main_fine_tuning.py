@@ -195,7 +195,7 @@ def main():
     # IMPROVEMENT: ReduceLROnPlateau instead of hand-rolled scheduler
     # Reduces LR by factor 0.1 if val loss doesn't improve for 3 epochs
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer_ft, mode='min', factor=0.1, patience=3, verbose=True)
+        optimizer_ft, mode='min', factor=0.1, patience=3)
 
     trained, best_acc, best_epoch = train_model(
         model_ft, criterion, optimizer_ft, scheduler, num_epochs=30)
