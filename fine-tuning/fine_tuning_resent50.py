@@ -11,22 +11,11 @@ import os
 from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
-# If you want to keep a track of your network on tensorboard, set USE_TENSORBOARD TO 1 in config file.
-if USE_TENSORBOARD:
-    from pycrayon import CrayonClient
-    cc = CrayonClient(hostname=TENSORBOARD_SERVER)
-    try:
-        cc.remove_experiment(EXP_NAME)
-    except:
-        pass
-    foo = cc.create_experiment(EXP_NAME)
-
-
-# Set device - uses MPS on Apple Silicon, falls back to CPU
+# Set device
 use_gpu = GPU_MODE
 if use_gpu:
-    device = torch.device(
-        "mps" if torch.backends.mps.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else
+                          "mps" if torch.backends.mps.is_available() else "cpu")
 else:
     device = torch.device("cpu")
 
@@ -38,25 +27,17 @@ data_transforms = {
         transforms.RandomHorizontalFlip(0.3),
         transforms.RandomRotation(30),
         transforms.ColorJitter(
-            brightness=0.2,
-            contrast=0.2,
-            saturation=0.2,
-            hue=(-0.03, 0.03)),
-        transforms.RandomApply(
-            [transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0))],
-            p=0.1
-        ),
+            brightness=0.2, contrast=0.2, saturation=0.2, hue=0.03),
+        transforms.GaussianBlur(kernel_size=3, p=0.1),
         transforms.RandomErasing(p=0.1),
         transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406],
-                             [0.229, 0.224, 0.225]),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
     ]),
     'val': transforms.Compose([
         transforms.Resize(256),
         transforms.CenterCrop(224),
         transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406],
-                             [0.229, 0.224, 0.225]),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ]),
 }
 
@@ -76,22 +57,20 @@ sampler = torch.utils.data.WeightedRandomSampler(
 
 dset_loaders = {
     'train': torch.utils.data.DataLoader(dsets['train'], batch_size=BATCH_SIZE,
-                                         sampler=sampler, num_workers=0, pin_memory=False),
+                                         sampler=sampler, num_workers=4, pin_memory=True),
     'val':   torch.utils.data.DataLoader(dsets['val'],   batch_size=BATCH_SIZE,
-                                         shuffle=False,  num_workers=0, pin_memory=False),
+                                         shuffle=False,  num_workers=4, pin_memory=True),
 }
 dset_sizes = {x: len(dsets[x]) for x in ['train', 'val']}
 dset_classes = dsets['train'].classes
 
 
-def train_model(model, criterion, optimizer, scheduler, num_epochs=30):
+def train_model(model, criterion, optimizer, scheduler, num_epochs=50):
     since = time.time()
     best_epoch = 0
     best_model = model
     best_acc = 0.0
-
-    # IMPROVEMENT: early stopping - stop if no improvement for this many epochs
-    patience = 10
+    patience = 7  # slightly more patience than ResNet18 since it's bigger
     epochs_no_improve = 0
 
     for epoch in range(num_epochs):
@@ -110,7 +89,6 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=30):
 
             for data in dset_loaders[phase]:
                 inputs, labels = data
-
                 inputs = inputs.float().to(device)
                 labels = labels.long().to(device)
 
@@ -141,13 +119,8 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=30):
                 phase, epoch_loss, epoch_acc))
 
             if phase == 'val':
-                # IMPROVEMENT: ReduceLROnPlateau steps on val loss
                 scheduler.step(epoch_loss)
                 print(f"Current LR: {optimizer.param_groups[0]['lr']:.6f}")
-
-                if USE_TENSORBOARD:
-                    foo.add_scalar_value('epoch_loss', epoch_loss, step=epoch)
-                    foo.add_scalar_value('epoch_acc', epoch_acc, step=epoch)
 
                 if epoch_acc > best_acc:
                     best_acc = epoch_acc
@@ -159,7 +132,6 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=30):
                     epochs_no_improve += 1
                     print(f"No improvement for {epochs_no_improve} epoch(s)")
 
-        # IMPROVEMENT: early stopping check
         if epochs_no_improve >= patience:
             print(f"Early stopping triggered after {epoch + 1} epochs")
             break
@@ -172,15 +144,14 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=30):
 
 
 def main():
-    model_ft = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+    # ResNet50 - deeper than ResNet18, more capacity for complex features
+    model_ft = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
 
-    # Freeze early layers
+    # Freeze early layers - ResNet50 has layer1-4 same as ResNet18
     for param in model_ft.parameters():
         param.requires_grad = False
 
-    # IMPROVEMENT: also unfreeze layer2 for more capacity
-    for param in model_ft.layer1.parameters():
-        param.requires_grad = True
+    # Unfreeze last three layer blocks - more than ResNet18 since we have GPU
     for param in model_ft.layer2.parameters():
         param.requires_grad = True
     for param in model_ft.layer3.parameters():
@@ -188,26 +159,29 @@ def main():
     for param in model_ft.layer4.parameters():
         param.requires_grad = True
 
-    num_ftrs = model_ft.fc.in_features
+    # ResNet50's fc layer has 2048 input features (vs 512 in ResNet18)
+    num_ftrs = model_ft.fc.in_features  # will be 2048
     model_ft.fc = nn.Linear(num_ftrs, NUM_CLASSES)
+
+    print(f"ResNet50 fc input features: {num_ftrs}")  # confirms 2048
+    print(f"Total trainable parameters: "
+          f"{sum(p.numel() for p in model_ft.parameters() if p.requires_grad):,}")
 
     model_ft = model_ft.to(device)
 
-    # Weighted loss as a guard against class imbalance
+    # Weighted loss for class imbalance
     class_weights = 1.0 / torch.tensor(class_counts, dtype=torch.float)
     criterion = nn.CrossEntropyLoss(weight=class_weights.to(device))
 
-    # Only pass parameters that require gradients
+    # Slightly lower LR than ResNet18 - ResNet50 is more sensitive to LR
     optimizer_ft = optim.Adam(
-        filter(lambda p: p.requires_grad, model_ft.parameters()), lr=BASE_LR)
+        filter(lambda p: p.requires_grad, model_ft.parameters()), lr=BASE_LR * 0.5)
 
-    # IMPROVEMENT: ReduceLROnPlateau instead of hand-rolled scheduler
-    # Reduces LR by factor 0.1 if val loss doesn't improve for 3 epochs
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer_ft, mode='min', factor=0.1, patience=5)
+        optimizer_ft, mode='min', factor=0.1, patience=3)
 
     trained, best_acc, best_epoch = train_model(
-        model_ft, criterion, optimizer_ft, scheduler, num_epochs=30)
+        model_ft, criterion, optimizer_ft, scheduler, num_epochs=50)
 
     torch.save({
         'epoch': best_epoch,
@@ -215,7 +189,8 @@ def main():
         'best_acc': best_acc,
         'num_classes': NUM_CLASSES,
         'class_names': dset_classes,
-    }, 'model.pt')
+        'architecture': 'resnet50',
+    }, 'model_resnet50.pt')
 
 
 if __name__ == '__main__':
