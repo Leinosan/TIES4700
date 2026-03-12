@@ -8,8 +8,8 @@ To split the training data 80/20 run:
 
 `python split_script.py`
 
-You can then run the fine tuning:
+There are two fine tuning examples, a one using Resnet18 and one Resnet50 located in files with respective names. You can run the fine tuning:
 
 `python install matplotlib`
 
-`python main_fine_tuning.py`
+`python fine_tuning_resnet50.py`

@@ -67,10 +67,12 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
     return total_loss / len(loader)
 
 
-def validate(model, loader, criterion, device):
+def validate(model, loader, criterion, device, print_report=False):
     model.eval()
     total_loss = 0
     correct = 0
+    all_preds = []
+    all_labels = []
 
     with torch.no_grad():
         for imgs, labels in loader:
@@ -79,9 +81,20 @@ def validate(model, loader, criterion, device):
             loss = criterion(outputs, labels)
 
             total_loss += loss.item()
-            correct += (outputs.argmax(1) == labels).sum().item()
+            preds = outputs.argmax(1)
+            correct += (preds == labels).sum().item()
+
+            all_preds.extend(preds.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
 
     accuracy = correct / len(loader.dataset)
+
+    if print_report:
+        from sklearn.metrics import classification_report
+        print("\nClassification Report:")
+        print(classification_report(all_labels, all_preds,
+                                    target_names=loader.dataset.classes))
+
     return total_loss / len(loader), accuracy
 
 
@@ -94,12 +107,12 @@ if __name__ == "__main__":
     val_tfms = data_transforms['val']
 
     train_ds = datasets.ImageFolder(
-        "RODI-DATA_split/train",
+        os.path.join(data_root, "RODI-DATA_split/train"),
         transform=train_tfms,
         is_valid_file=is_image_file
     )
     val_ds = datasets.ImageFolder(
-        "RODI-DATA_split/val",
+        os.path.join(data_root, "RODI-DATA_split/val"),
         transform=val_tfms,
         is_valid_file=is_image_file
     )
@@ -190,3 +203,89 @@ if __name__ == "__main__":
             best_acc = val_acc
             torch.save(model.state_dict(), best_model_path)
             print(f"New best model saved with accuracy: {best_acc:.4f}")
+
+    # -----------------------------
+    # 6. FINAL EVALUATION ON BEST MODEL
+    # -----------------------------
+    from sklearn.metrics import classification_report, roc_auc_score, average_precision_score
+    import numpy as np
+
+    def evaluate(model, loader, criterion, device, class_names):
+        model.eval()
+        total_loss = 0
+        correct = 0
+        all_preds = []
+        all_labels = []
+        all_probs = []
+
+        with torch.no_grad():
+            for imgs, labels in loader:
+                imgs, labels = imgs.to(device), labels.to(device)
+                outputs = model(imgs)
+                loss = criterion(outputs, labels)
+                probs = torch.softmax(outputs, dim=1)
+
+                total_loss += loss.item()
+                preds = outputs.argmax(1)
+                correct += (preds == labels).sum().item()
+
+                all_preds.extend(preds.cpu().numpy())
+                all_labels.extend(labels.cpu().numpy())
+                all_probs.extend(probs.cpu().numpy())
+
+        all_labels = np.array(all_labels)
+        all_preds = np.array(all_preds)
+        all_probs = np.array(all_probs)
+        accuracy = correct / len(loader.dataset)
+
+        # Per-class report
+        print("\nClassification Report:")
+        print(classification_report(all_labels,
+              all_preds, target_names=class_names))
+
+        # Binary fish vs non-fish
+        fish_idx = class_names.index("fish")
+        binary_labels = (all_labels == fish_idx).astype(int)
+        binary_preds = (all_preds == fish_idx).astype(int)
+        fish_probs = all_probs[:, fish_idx]
+
+        fish_tp = ((binary_preds == 1) & (binary_labels == 1)).sum()
+        fish_fp = ((binary_preds == 1) & (binary_labels == 0)).sum()
+        fish_fn = ((binary_preds == 0) & (binary_labels == 1)).sum()
+        non_fish_tp = ((binary_preds == 0) & (binary_labels == 0)).sum()
+        non_fish_fp = ((binary_preds == 0) & (binary_labels == 1)).sum()
+        non_fish_fn = ((binary_preds == 1) & (binary_labels == 0)).sum()
+
+        p_fish = fish_tp / \
+            (fish_tp + fish_fp) if (fish_tp + fish_fp) > 0 else 0
+        r_fish = fish_tp / \
+            (fish_tp + fish_fn) if (fish_tp + fish_fn) > 0 else 0
+        f1_fish = 2 * p_fish * r_fish / \
+            (p_fish + r_fish) if (p_fish + r_fish) > 0 else 0
+
+        p_nonfish = non_fish_tp / \
+            (non_fish_tp + non_fish_fp) if (non_fish_tp + non_fish_fp) > 0 else 0
+        r_nonfish = non_fish_tp / \
+            (non_fish_tp + non_fish_fn) if (non_fish_tp + non_fish_fn) > 0 else 0
+
+        auroc = roc_auc_score(binary_labels, fish_probs)
+        auprc = average_precision_score(binary_labels, fish_probs)
+
+        print(f"Binary Fish vs Non-Fish Metrics:")
+        print(
+            f"  P_fish={p_fish:.3f}, R_fish={r_fish:.3f}, F1_fish={f1_fish:.3f}")
+        print(f"  P_non_fish={p_nonfish:.3f}, R_non_fish={r_nonfish:.3f}")
+        print(
+            f"  Accuracy={accuracy:.3f}, AUROC={auroc:.3f}, AUPRC={auprc:.3f}")
+
+        return accuracy
+
+    print("\nLoading best model for final evaluation...")
+    model.load_state_dict(torch.load(best_model_path))
+    class_names = train_loader.dataset.classes
+
+    print("\n--- Training Set ---")
+    evaluate(model, train_loader, criterion, device, class_names)
+
+    print("\n--- Validation Set ---")
+    evaluate(model, val_loader, criterion, device, class_names)
