@@ -21,9 +21,9 @@ The notebooks report **training and validation results** using the required 8 me
 
 - `LR-test/`  
   Contains notebooks:
-  - `CNN.ipynb`
-  - `ResNet18_LR1e-4.ipynb`
-  - `ResNet18_LR1e-5.ipynb`
+  - `CNN_M1.ipynb`
+  - `ResNet18_LR1e-4_M2.ipynb`
+  - `ResNet18_LR1e-5_M3.ipynb`
 
 ## Data
 
