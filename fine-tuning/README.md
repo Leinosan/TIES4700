@@ -13,3 +13,5 @@ There are two fine tuning examples, a one using Resnet18 and one Resnet50 locate
 `python install matplotlib`
 
 `python fine_tuning_resnet50.py`
+
+The model with better results is saved here: https://drive.google.com/file/d/1mvPT-AzAn_H_ZJkInDLitl2wKU-wNWAS/view?usp=drive_link
