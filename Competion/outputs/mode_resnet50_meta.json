@@ -1,0 +1,22 @@
+{
+  "epoch": 17,
+  "best_metric": 0.9984992496248123,
+  "metric_name": "f1_fish",
+  "model_name": "resnet50",
+  "class_to_idx": {
+    "artifact": 0,
+    "fish": 1,
+    "insect": 2,
+    "leave": 3,
+    "partial-overlapping-objects": 4,
+    "rounded": 5,
+    "shadow": 6,
+    "variable": 7,
+    "wormish": 8
+  },
+  "batch_size": 256,
+  "amp_dtype": "torch.bfloat16",
+  "tf32": true,
+  "channels_last": true,
+  "torch_compile": false
+}

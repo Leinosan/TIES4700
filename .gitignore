@@ -1,9 +1,4 @@
-*.pt
-*.pth
-*.csv
 *.log
-
-outputs/
 
 RODI-DATA*
 
